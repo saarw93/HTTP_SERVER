@@ -18,6 +18,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 
 #define DEBUG
 #define USAGE "Usage: server <port> <pool-size> <max-number-of-request>\r\n"
@@ -37,7 +38,7 @@ int make_response(int response_num, char* path, int fd);
 int is_only_digits(char* str);
 int stat_func(struct stat* file_stat, char* path, int fd);
 int check_path_permission(char* path, int fd);
-int search_index_html_file(char* path);
+int search_index_html_file(char* path, int fd);
 int make_file_response(char* path, int fd);
 char* get_mime_type(char* name);
 char* get_last_modified(char* file);
@@ -84,6 +85,8 @@ int main(int argc, char* argv[])
         close(fd);
         exit(EXIT_FAILURE);
     }
+
+    signal(SIGPIPE, SIG_IGN);   //ignore case of sigan pipe
 
     int* clients_fd = (int*)malloc(sizeof(int) * atoi(argv[3]));
     if (clients_fd == NULL)
@@ -211,7 +214,7 @@ int check_request(char* request, int fd)
 
         if (strcmp(slash_end_path + 1, "\0") == 0) //the path ends with slash, need to send response of index.html to the client
         {
-            status = search_index_html_file(path+1);
+            status = search_index_html_file(path+1, fd);
             if (status == 403)
                 return make_response(403, NULL, fd);
             if (status == 500)
@@ -224,12 +227,20 @@ int check_request(char* request, int fd)
                     return make_response(500, NULL, fd);
                 bzero(index_path, path_len);
                 sprintf(index_path, "%s%s", path+1, "index.html");
+                if (check_path_permission(index_path, fd) != OK)    //need to check the permissions of the path
+                {
+                    free(index_path);
+                    return ERR_WAS_SEND;
+                }
+
                 int val = make_file_response(index_path, fd);
                 free(index_path);
                 return val;
             }
             else   //need to return the content of the last directory in the path
             {
+                if (check_path_permission(path+1, fd) != OK)    //need to check the permissions of the path
+                    return ERR_WAS_SEND;
                 return make_dir_content_response(path+1, fd);
             }
         }
@@ -253,14 +264,15 @@ int stat_func(struct stat* file_stat, char* path, int fd)
 {
     if (path != NULL && file_stat != NULL)
     {
+        if (strlen(path) == 0)
+            strcpy(path, "./");
         if (stat(path, file_stat) < 0)
         {
-            if (errno == ENOENT || errno == EFAULT)  //TODO CHECK ABOUT THE file/  !!!
+            int size = strlen(path);
+            if (errno == ENOENT || errno == EFAULT || (strcmp((path+strlen(path)-1), "/") == 0 && errno == ENOTDIR))
                 return make_response(404, NULL, fd);
             else
-            {
                 return make_response(500, NULL, fd);
-            }
         }
         return 1;
     }
@@ -268,7 +280,7 @@ int stat_func(struct stat* file_stat, char* path, int fd)
 }
 
 
-int search_index_html_file(char* path)
+int search_index_html_file(char* path, int fd)
 {
     int num_of_files = 0, i, j;
     //struct stat file_stat;   //a struct that saves data on a file
@@ -284,6 +296,8 @@ int search_index_html_file(char* path)
     {
         if (strcmp(dir_file_list[i]->d_name, "index.html") == 0)
         {
+            check_path_permission(path, fd);
+
             for (j = 0; j < num_of_files; j++)
                 free(dir_file_list[j]);
             free(dir_file_list);
@@ -301,7 +315,6 @@ int search_index_html_file(char* path)
     for (j = 0; j < num_of_files; j++)
         free(dir_file_list[j]);
     free(dir_file_list);
-    return OK;
     return -1;  //the file index.html does not exist, need to return the contents of the directory in the format as in file dir_content.txt.
 }
 
@@ -353,9 +366,10 @@ int make_file_response(char* path, int fd)
     printf("response =\r\n %s%s\r\n", header_response, header_response);
 #endif
 
+
     status = write_response(header_response, fd); //write the headers to the client
-        if (status != OK)
-            return ERR_WAS_SEND;
+    if (status != OK)
+        return ERR_WAS_SEND;
 
     read_write_file(path, fd);  //read and write the content of the file to the client
     free(time);
@@ -386,8 +400,10 @@ int read_write_file(char* path, int fd)
             break;
 
         w_nbytes = (int)write(fd, buffer, r_nbytes); //write to the client the content which was read in the read() function
-        if (w_nbytes < 0)
+        if (w_nbytes < 0) {
+            close (file_fd);
             return make_response(500, NULL, fd);
+        }
 
     }
     close(file_fd);
@@ -430,7 +446,7 @@ int write_response(char* buffer, int fd)
 }
 
 #define FILE_INFO "<tr>\r\n<td><A HREF=%s>%s</A></td><td>%s</td><td>%s</td></tr>\r\n"
-#define FOLDER_INFO "<tr>\n<td><A HREF=%s>%s</A></td><td>%s</td><td></td></tr>\r\n"
+#define FOLDER_INFO "<tr>\r\n<td><A HREF=%s>%s</A></td><td>%s</td><td></td></tr>\r\n"
 int make_dir_content_response(char* path, int fd)
 {
     int num_of_files = 0, size = 0, old_size = 0, entity_size = 0, status = 0, i = 0;
@@ -449,7 +465,8 @@ int make_dir_content_response(char* path, int fd)
     char html_start[] = "<HTML>\r\n<HEAD><TITLE>Index of %s</TITLE></HEAD>\r\n\r\n<BODY><H4>Index of %s</H4>\r\n\r\n"
             "<table CELLSPACING=8>\r\n<tr><th>Name</th><th>Last Modified</th><th>Size</th></tr>\r\n\r\n";
     char html_end[] = "</table>\r\n<HR>\r\n<ADDRESS>webserver/1.0</ADDRESS>\r\n</BODY></HTML>";
-    size = (int)(strlen(html_start) + strlen(html_end) + 1);
+    size = (int)(strlen(html_start) + (strlen(path) * 2) + strlen(html_end) + 1);
+
 
     char* response = (char*)malloc(sizeof(char) * size);  //response will be the html content of the server response to the client
     if (response == NULL)
@@ -583,9 +600,9 @@ int make_dir_content_response(char* path, int fd)
         }
         bzero(response + old_size,size - old_size);
 
-        if (S_ISDIR(entity_stat.st_mode) == 1 && i>=2) //build the string for a folder (besides "." and "..")
+        if (S_ISDIR(entity_stat.st_mode) == 1) //build the string for a folder
             sprintf(response + strlen(response), FOLDER_INFO, entity_href, entity_name, last_modified);
-        else   //build a string for a file and for "." and ".."
+        else   //build a string for a file
             sprintf(response + strlen(response), FILE_INFO, entity_href, entity_name, last_modified, f_size_to_str);
 
         free(last_modified);
@@ -626,9 +643,9 @@ int make_dir_content_response(char* path, int fd)
     bzero(header_response, sizeof(char) * header_size);
 
     sprintf(header_response, FILE_RESPONSE_TYPE, date, "text/html", (int)strlen(response), last_modified);
-#ifdef DEBUG
-    printf("response = %s%s\r\n", header_response, response);
-#endif
+    #ifdef DEBUG
+    printf("response = \r\n\r\n%s%s\r\n\r\n", header_response, response);
+    #endif
 
     write_response(header_response, fd);
     status = write_response(response, fd);
@@ -693,13 +710,14 @@ char* do_str_malloc(int size)
 
 int check_path_permission(char *path, int fd)
 {
+    if (path == NULL)
+        return make_response(500, NULL, fd);
     struct stat f_stat;
     char *path_copy = (char*)malloc(sizeof(char)*(strlen(path)+1));
     if (path_copy == NULL)
-    {
         return make_response(500, NULL, fd);  //need to send error 500 to the client
-    }
-    char *folder;
+
+    char *folder = NULL;
     strcpy(path_copy, path);
     folder = strtok(path_copy, "/");
     int status = 0;
@@ -723,13 +741,18 @@ int check_path_permission(char *path, int fd)
         else
             break;
     }
-    if(!(S_ISREG(f_stat.st_mode)) || (S_ISREG(f_stat.st_mode) && !(f_stat.st_mode & S_IROTH))) //file isn't regular or does not have read permission to "other"
+
+    if (S_ISREG(f_stat.st_mode) && (f_stat.st_mode & S_IROTH)) //file is regular and has read permission to "other"
     {
         free(folder);
-        return make_response(403, NULL, fd);
+        return OK;    //it means the the permissions of the path's folders and file are OK
+    }
+    if (S_ISDIR(f_stat.st_mode) && strcmp(path+strlen(path)-1, "/") == 0) {
+        free(folder);
+        return OK;  //it means the the permissions of the path's folders are OK
     }
     free(folder);
-    return OK;  //it means the the permissions of the path's folders and/ or file are OK
+    return make_response(403, NULL, fd);
 }
 
 
@@ -762,9 +785,6 @@ int make_socket_connection(char* argv[])
         perror("ERROR: listen() has been failed\r\n");
         exit(1);
     }
-    //struct sockaddr_in cli;	      /* used by accept() */
-    //int newfd;			      /* returned by accept() */
-    //int cli_len = sizeof(cli);	/* used by accept() */
     return fd;
 }
 
@@ -816,7 +836,6 @@ int make_response(int response_num, char* path, int fd)
     }
     bzero(response, size * sizeof(char));
 
-
     switch (response_num)
     {
         case 302 :
@@ -840,11 +859,13 @@ int make_response(int response_num, char* path, int fd)
     }
     free(time);
 #ifdef DEBUG
-    printf("response = \r\n%s\r\n", response);
+    printf("response = \r\n\n%s\r\n\r\n", response);
 #endif
     write_response(response, fd);
     free(response);
-    return OK;
+    if (response_num == 302)
+        return OK;
+    return ERR_WAS_SEND;
 }
 
 
