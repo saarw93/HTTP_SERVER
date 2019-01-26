@@ -1,8 +1,4 @@
-JCE login username: saarwe
-Name of Student: Saar Weitzman
-I.D: 204175137
-
-Home Exercise 3 - HTTP Server
+HTTP Server
 
 
 -------------List of files------------
