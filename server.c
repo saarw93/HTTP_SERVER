@@ -18,9 +18,9 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
 
-#define DEBUG
+
+//#define DEBUG
 #define USAGE "Usage: server <port> <pool-size> <max-number-of-request>\r\n"
 #define RFC1123FMT "%a, %d %b %Y %H:%M:%S GMT"
 #define BUFFER_SIZE 4001
@@ -87,8 +87,6 @@ int main(int argc, char* argv[])
         close(fd);
         exit(EXIT_FAILURE);
     }
-
-    signal(SIGPIPE, SIG_IGN);   //ignore case of siganl pipe
 
     int* clients_fd = (int*)malloc(sizeof(int) * atoi(argv[3])); //the size of max number of requests
     if (clients_fd == NULL)
@@ -209,13 +207,11 @@ int check_request(char* request, int fd)
         char* slash_end_path = strrchr(path, '/');  //get a pointer to the last slash in the requested path
 
         if (slash_end_path == NULL || slash_end_path+1 == NULL)
-            return make_response(400, NULL, fd);  //TODO CHECK IF THIS IS POSSIBLE that one of those will be NULL, and if it is, what need to return
+            return make_response(400, NULL, fd);
 
         if (strcmp(slash_end_path + 1, "\0") == 0) //the path ends with slash, need to send response of index.html to the client
         {
             status = search_index_html_file(path+1, fd);  //check if index.html file does exist in the path folder
-            //if (status == 403)
-            //   return make_response(403, NULL, fd);
             if (status == 500)
                 return make_response(500, NULL, fd);
             if (status == OK)  //need to return index.html
@@ -294,8 +290,6 @@ int search_index_html_file(char* path, int fd)
     {
         if (strcmp(dir_file_list[i]->d_name, "index.html") == 0)
         {
-            //check_path_permission(path, fd);  //the "index.html" file does exist, need to check its permissions
-
             for (j = 0; j < num_of_files; j++)
                 free(dir_file_list[j]);
             free(dir_file_list);
@@ -398,9 +392,9 @@ int read_write_file(char* path, int fd)
         w_nbytes = (int)write(fd, buffer, r_nbytes); //write to the client the content which was read in the read() function
         if (w_nbytes < 0) {
             close (file_fd);
-            return make_response(500, NULL, fd);
+            perror("ERROR: write function failed\r\n");
+            return -1;
         }
-
     }
     close(file_fd);
     return OK;
@@ -411,13 +405,15 @@ int read_write_file(char* path, int fd)
 int write_response(char* buffer, int fd)
 {
     if (buffer == NULL || fd < 0)
-        return make_response(500, NULL, fd);
+        return -1;
     int w_nbytes = 0;
 
     w_nbytes = (int)write(fd, buffer, strlen(buffer));
     if (w_nbytes < 0)
-        return make_response(500, NULL, fd);
-
+    {
+        perror("ERROR: write function failed\r\n");
+        return -1;
+    }
     return OK;
 }
 
