@@ -18,6 +18,7 @@ or enqueue the request to the queue, in case there is no available thread in the
 
 
 --------Installation/Compilation of the program---------
+
 Open linux terminal, navigate to the folder containing "ex3" folder using the "cd" command (confirm it by using ls command)
 Type in the terminal: gcc threadpool.h threadpool.c server.c -o server -g -Wall -lpthread .
 
