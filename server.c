@@ -27,32 +27,34 @@
 #define OK 200
 #define ERR_WAS_SEND (-1)
 #define MAX_PORT_NUM 65535
-#define MIN_PORT_NUM 0
+#define MIN_PORT_NUM 1
 
 
+/**functions declerations**/
 int make_socket_connection(char* argv[]);
 int create_response(void* fd);
 int check_request(char* request, int fd);
-char* get_time();
 int make_response(int response_num, char* path, int fd);
-int is_only_digits(char* str);
+int make_file_response(char* path, int fd);
+int make_dir_content_response(char* path, int fd);
 int stat_func(struct stat* file_stat, char* path, int fd);
 int check_path_permission(char* path, int fd);
 int search_index_html_file(char* path, int fd);
-int make_file_response(char* path, int fd);
-char* get_mime_type(char* name);
-char* get_last_modified(char* file);
 int read_write_file(char* path, int fd);
-int make_dir_content_response(char* path, int fd);
+int write_response(char* buffer, int fd);
+char* get_mime_type(char* name);
+char* get_time();
+char* get_last_modified(char* file);
 int num_to_str_size(int num);
 char* add_entity_quote(char* entity_name, int flag);
 char* do_str_malloc(int size);
-int write_response(char* buffer, int fd);
+int is_only_digits(char* str);
+
 
 
 int main(int argc, char* argv[])
 {
-    if (argc != 4)
+    if (argc != 4)  //there are too many arguments in argv
     {
         printf(USAGE);
         exit(EXIT_FAILURE);
@@ -61,24 +63,24 @@ int main(int argc, char* argv[])
     int i;
     for (i = 1; i < argc; i++)
     {
-        if (is_only_digits(argv[i]) != 1)
+        if (is_only_digits(argv[i]) != 1)  //check that the input numbers are composed only from digits
         {
             printf(USAGE);
             exit(EXIT_FAILURE);
         }
     }
-
-    if ((atoi(argv[1]) < MIN_PORT_NUM || atoi(argv[1]) > MAX_PORT_NUM) || atoi(argv[2]) <= 0 || atoi(argv[3]) <= 0) //if the input port and/or max num of requests are negative
+    //if the input port, or max num of requests, or max num of threads in pool are negative
+    if ((atoi(argv[1]) < MIN_PORT_NUM || atoi(argv[1]) > MAX_PORT_NUM) || (atoi(argv[2]) <= 0 || atoi(argv[3]) <= 0))
     {
         printf(USAGE);
         exit(EXIT_FAILURE);
     }
 
-    int fd = make_socket_connection(argv);
+    int fd = make_socket_connection(argv);  //make a welcome socket
     if (fd < 0)
         exit(EXIT_FAILURE);
 
-    threadpool *server_threadpool = create_threadpool(atoi(argv[2]));
+    threadpool *server_threadpool = create_threadpool(atoi(argv[2]));  //create thread pool by the input pool size
     if (server_threadpool == NULL)
     {
         printf(USAGE);
@@ -86,29 +88,28 @@ int main(int argc, char* argv[])
         exit(EXIT_FAILURE);
     }
 
-    signal(SIGPIPE, SIG_IGN);   //ignore case of sigan pipe
+    signal(SIGPIPE, SIG_IGN);   //ignore case of siganl pipe
 
-    int* clients_fd = (int*)malloc(sizeof(int) * atoi(argv[3]));
+    int* clients_fd = (int*)malloc(sizeof(int) * atoi(argv[3])); //the size of max number of requests
     if (clients_fd == NULL)
     {
-        printf("there was an error\r\n");
+        printf("ERROR: malloc of clients_fd array failed\r\n");
         close(fd);
         destroy_threadpool(server_threadpool);
         exit(EXIT_FAILURE);
     }
-    memset(clients_fd, 0, sizeof(int) * atoi(argv[3]));
+    memset(clients_fd, 0, sizeof(int) * atoi(argv[3]));  //initialize the array with zeroes
 
     for( i = 0; i < atoi(argv[3]); i++)
     {
-        clients_fd[i] = accept(fd, NULL, NULL);
+        clients_fd[i] = accept(fd, NULL, NULL);  //wait for clients' requests
         if(clients_fd[i] < 0)
         {
             perror("ERROR: accept() has been failed\r\n");
             break;
         }
-
+        //use one of threads in pool to create response to the client
         dispatch (server_threadpool, create_response, (void*)&clients_fd[i]);
-        //create_response(&clients_fd[i]);
     }
     close(fd);
     destroy_threadpool(server_threadpool);
@@ -117,49 +118,49 @@ int main(int argc, char* argv[])
 }
 
 
-/**this function will:
- * 1.read the request from the client and write him back the response
- * 2. check the validation of the request
- * 3. make the needed response
+/**This function:
+ * 1.read the request from the client
+ * 2.check the validation of the request
+ * 3.make the needed response
+ * 4.write the response to the client
+ * the function will do it by using other sub methods
  * **/
 int create_response(void* fd)
 {
     if (fd == NULL)
+    {
+        printf("Error: create response got a NULL void* fd\r\n");
         return -1;
+    }
 
     char request_buffer[BUFFER_SIZE];
     bzero(request_buffer, BUFFER_SIZE);
 
-    int sum = 0, nbytes = 0;
-    int sockfd = (*(int*)fd);  //cast the input argument
+    int nbytes = 0;
+    int sockfd = (*(int*)fd);  //cast the input fd argument
+    #ifdef DEBUG
     printf("in create response function\r\n");
-    //while(1)
-    //{
-    nbytes = (int)read(sockfd, request_buffer , BUFFER_SIZE - 1);
-        //nbytes = (int) read(sockfd, request_buffer+sum , BUFFER_SIZE - sum);
-        //sum+= nbytes;
+    #endif
 
+    nbytes = (int)read(sockfd, request_buffer , BUFFER_SIZE - 1);  //read request from client
     if (nbytes < 0)
     {
         perror("ERROR: cannot read from socket");
         return  make_response(500, NULL, sockfd);
     }
-        //printf("nbytes = %d\r\n",nbytes);
-       // if (strstr(request_buffer, "\r\n") /*|| strchr(request_buffer, '\0'*/)
-       // {
-       //    break;
-       // }
-    //}
 
-    int response = check_request(request_buffer, sockfd);
+    int response = check_request(request_buffer, sockfd); //check request will check validation and send response to client
     close(sockfd);
     if (response == ERR_WAS_SEND)
-        return ERR_WAS_SEND;
+        return ERR_WAS_SEND;    //notify the server sent an error message to the client
     return 0;
 }
 
 
-/**the function checks that there are 3 tokens in the first line of the request**/
+/**the function:
+ * 1.checks that there are 3 tokens in the first line of the request and their validation
+ * 2.checks if the path is a file or a folder and sends the requests to the needed sub method
+ * **/
 int check_request(char* request, int fd)
 {
     char *method = NULL, *path = NULL, *version = NULL;
@@ -167,9 +168,9 @@ int check_request(char* request, int fd)
     int status = 0;
     strtok(temp_token, "\r\n");  //get the first line of the request
 
-#ifdef DEBUG
+    #ifdef DEBUG
     printf("%s\r\n", temp_token);
-#endif
+    #endif
 
     temp_token = strtok(temp_token, " ");  // get the first token (i.e, the GET)
     int i = 0;
@@ -185,7 +186,7 @@ int check_request(char* request, int fd)
         i++;
     }
 
-    if (i != 3)
+    if (i != 3)  //too much or not enough arguments in the cmd input
         return make_response(400, NULL, fd);
 
     if (strcmp(version, "HTTP/1.0") != 0 && strcmp(version, "HTTP/1.1") != 0)
@@ -197,32 +198,30 @@ int check_request(char* request, int fd)
 
     /*from here we check the validation of the path*/
     struct stat file_stat;  //a struct that saves data on a file
-
     status = stat_func(&file_stat, path+1, fd);
     if (status != 1)
         return ERR_WAS_SEND;
 
     /*if we got here, the path exists*/
 
-    /*the path is a directory*/
-    if(S_ISDIR(file_stat.st_mode) == 1)
+    if(S_ISDIR(file_stat.st_mode) == 1)   /*the path is a directory*/
     {
-        char* slash_end_path = strrchr(path, '/');
+        char* slash_end_path = strrchr(path, '/');  //get a pointer to the last slash in the requested path
 
         if (slash_end_path == NULL || slash_end_path+1 == NULL)
             return make_response(400, NULL, fd);  //TODO CHECK IF THIS IS POSSIBLE that one of those will be NULL, and if it is, what need to return
 
         if (strcmp(slash_end_path + 1, "\0") == 0) //the path ends with slash, need to send response of index.html to the client
         {
-            status = search_index_html_file(path+1, fd);
-            if (status == 403)
-                return make_response(403, NULL, fd);
+            status = search_index_html_file(path+1, fd);  //check if index.html file does exist in the path folder
+            //if (status == 403)
+            //   return make_response(403, NULL, fd);
             if (status == 500)
                 return make_response(500, NULL, fd);
             if (status == OK)  //need to return index.html
             {
                 int path_len = (int)(strlen(path) + strlen("index.html") + 1);
-                char* index_path = (char*)malloc(sizeof(char) * path_len);
+                char* index_path = (char*)malloc(sizeof(char) * path_len);  //append the index.html to the path
                 if (index_path == NULL)
                     return make_response(500, NULL, fd);
                 bzero(index_path, path_len);
@@ -244,15 +243,14 @@ int check_request(char* request, int fd)
                 return make_dir_content_response(path+1, fd);
             }
         }
-        else
-            return make_response(302, path+1, fd);   //there is no slash at the end of the path, need to send 302 found response
+        else   //there is no slash at the end of the path, need to send 302 found response
+            return make_response(302, path+1, fd);
     }
 
     /*if we got here, it means the path is a file, need to checks it's permissions and if it is a regular file*/
 
     status = check_path_permission(path+1, fd);
-
-    if (status == ERR_WAS_SEND)
+    if (status == ERR_WAS_SEND)  //the path is invalid
         return ERR_WAS_SEND;
 
     /*if we got here, the path permissions are OK and the file is a regular file*/
@@ -260,30 +258,30 @@ int check_request(char* request, int fd)
 }
 
 
+/**The function check if the path does exist in the server**/
 int stat_func(struct stat* file_stat, char* path, int fd)
 {
     if (path != NULL && file_stat != NULL)
     {
-        if (strlen(path) == 0)
+        if (strlen(path) == 0)  //case the request path is empty, need to bring the root directory content, or the index.html of it
             strcpy(path, "./");
         if (stat(path, file_stat) < 0)
         {
-            int size = strlen(path);
             if (errno == ENOENT || errno == EFAULT || (strcmp((path+strlen(path)-1), "/") == 0 && errno == ENOTDIR))
-                return make_response(404, NULL, fd);
+                return make_response(404, NULL, fd); //the path deos not exist in the server
             else
-                return make_response(500, NULL, fd);
+                return make_response(500, NULL, fd); //there was a problem with the function stat()
         }
-        return 1;
+        return 1;  //the path is valid
     }
     return make_response(500, NULL, fd);   //error with the path and/or the stat inputs of the function
 }
 
 
+/**The function checks if the file "index.html" does exist in the last folder of the path**/
 int search_index_html_file(char* path, int fd)
 {
     int num_of_files = 0, i, j;
-    //struct stat file_stat;   //a struct that saves data on a file
     struct dirent **dir_file_list;   //a struct that saves data on a directory
     num_of_files = scandir(path, &dir_file_list, NULL, alphasort); //scan directory to check if there is an index.html file in it
     if (num_of_files == -1)
@@ -296,34 +294,28 @@ int search_index_html_file(char* path, int fd)
     {
         if (strcmp(dir_file_list[i]->d_name, "index.html") == 0)
         {
-            check_path_permission(path, fd);
+            //check_path_permission(path, fd);  //the "index.html" file does exist, need to check its permissions
 
             for (j = 0; j < num_of_files; j++)
                 free(dir_file_list[j]);
             free(dir_file_list);
             return OK;
         }
-        //{
-            //if (S_ISREG(file_stat.st_mode) == 1 && (file_stat.st_mode & S_IROTH))  //index.html has read access
-            //
-              //  return OK;  //the file index.html does exist, need to return it
-            //}
-            //else
-                //return 403;  //index.html does not has read access
-        //}
     }
+
     for (j = 0; j < num_of_files; j++)
         free(dir_file_list[j]);
     free(dir_file_list);
-    return -1;  //the file index.html does not exist, need to return the contents of the directory in the format as in file dir_content.txt.
+    return -1;  //the file index.html does not exist, need to return the contents of the directory of the path
 }
 
 
 #define FILE_RESPONSE_TYPE "HTTP/1.0 200 OK\r\nServer: webserver/1.0\r\nDate: %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nLast-Modified: %s\r\nConnection: close\r\n\r\n"
 #define FILE_RESPONSE "HTTP/1.0 200 OK\r\nServer: webserver/1.0\r\nDate: %s\r\nContent-Length: %d\r\nLast-Modified: %s\r\nConnection: close\r\n\r\n"
+/**This function makes the headers of the response, and call a function which read the content of the path's file and write it to the client's socket**/
 int make_file_response(char* path, int fd)
 {
-    struct stat file_stat;
+    struct stat file_stat;  //struct that gives data on the file
     int status = stat_func(&file_stat, path, fd);
     if (status != 1)
         return ERR_WAS_SEND;
@@ -344,9 +336,9 @@ int make_file_response(char* path, int fd)
 
     int size = (int)(strlen(time) + strlen(last_modified) + file_size + 1);
     if (mime_type != NULL)
-        size+= (int)(strlen(FILE_RESPONSE_TYPE) + strlen(mime_type));
+        size+= (int)(strlen(FILE_RESPONSE_TYPE) + strlen(mime_type));  //size with mime_type
     else
-        size+= (int)strlen(FILE_RESPONSE);
+        size+= (int)strlen(FILE_RESPONSE);  //size without mime_type
 
     char* header_response = (char*)malloc(sizeof(char) * size);
     if (header_response == NULL)
@@ -358,30 +350,31 @@ int make_file_response(char* path, int fd)
     bzero(header_response, sizeof(char) * size);
 
     if (mime_type != NULL)
-        sprintf(header_response, FILE_RESPONSE_TYPE, time, mime_type, file_size, last_modified);
+        sprintf(header_response, FILE_RESPONSE_TYPE, time, mime_type, file_size, last_modified); //string with mime_type
     else
-        sprintf(header_response, FILE_RESPONSE, time, file_size, last_modified);
+        sprintf(header_response, FILE_RESPONSE, time, file_size, last_modified);  //string without mime_type
 
-#ifdef DEBUG
+    #ifdef DEBUG
     printf("response =\r\n %s%s\r\n", header_response, header_response);
-#endif
+    #endif
 
 
     status = write_response(header_response, fd); //write the headers to the client
     if (status != OK)
         return ERR_WAS_SEND;
 
-    read_write_file(path, fd);  //read and write the content of the file to the client
+    int val = read_write_file(path, fd);  //read and write the content of the file to the client
     free(time);
     free(last_modified);
     free(header_response);
-    return OK;
+    return val;
 }
 
 
+/**This function read data from file and write it to the client's socket**/
 int read_write_file(char* path, int fd)
 {
-    int file_fd = open(path, O_RDONLY);
+    int file_fd = open(path, O_RDONLY);  //open the file for read
     if (file_fd < 0)
         return make_response(500, NULL, fd);
     int r_nbytes = 0, w_nbytes = 0;
@@ -395,7 +388,10 @@ int read_write_file(char* path, int fd)
     {
         r_nbytes = (int)read(file_fd, buffer, sizeof(buffer)-1);  //read from the file
         if (r_nbytes < 0)
+        {
+            close(file_fd);
             return make_response(500, NULL, fd);
+        }
         if (r_nbytes == 0)
             break;
 
@@ -411,42 +407,23 @@ int read_write_file(char* path, int fd)
 }
 
 
+/**This function writes the response to the client's socket**/
 int write_response(char* buffer, int fd)
 {
     if (buffer == NULL || fd < 0)
         return make_response(500, NULL, fd);
-    int w_nbytes = 0, sum = 0;
+    int w_nbytes = 0;
 
     w_nbytes = (int)write(fd, buffer, strlen(buffer));
     if (w_nbytes < 0)
         return make_response(500, NULL, fd);
 
-//    while (1)
-//    {
-//        w_nbytes = (int)write(fd, buffer, strlen(buffer));//sizeof(buffer)-1);
-//        sum+= w_nbytes;
-//        if (w_nbytes < 0)
-//            return make_response(500, NULL, fd);
-//        if (w_nbytes == 0)
-//            break;
-//        if (sum == strlen((buffer+1)))
-//            break;
-//    }
-    /*    while (1)
-    {
-        nbytes = (int) write(sockfd, response, strlen(response)+1);
-        sum += nbytes;  //sum all the bytes of the request //TODO check if need that
-        if (nbytes < 0) {
-            perror("ERROR: cannot write to socket\r\n");
-        }
-        if (sum >= strlen(response))
-            break;
-    }*/
     return OK;
 }
 
 #define FILE_INFO "<tr>\r\n<td><A HREF=%s>%s</A></td><td>%s</td><td>%s</td></tr>\r\n"
 #define FOLDER_INFO "<tr>\r\n<td><A HREF=%s>%s</A></td><td>%s</td><td></td></tr>\r\n"
+/**This function write the headers and the content of the directory which the path points to, to the client's socket**/
 int make_dir_content_response(char* path, int fd)
 {
     int num_of_files = 0, size = 0, old_size = 0, entity_size = 0, status = 0, i = 0;
@@ -467,7 +444,6 @@ int make_dir_content_response(char* path, int fd)
     char html_end[] = "</table>\r\n<HR>\r\n<ADDRESS>webserver/1.0</ADDRESS>\r\n</BODY></HTML>";
     size = (int)(strlen(html_start) + (strlen(path) * 2) + strlen(html_end) + 1);
 
-
     char* response = (char*)malloc(sizeof(char) * size);  //response will be the html content of the server response to the client
     if (response == NULL)
     {
@@ -477,9 +453,8 @@ int make_dir_content_response(char* path, int fd)
         free(dir_file_list);
         return make_response(500, NULL, fd);
     }
-
     bzero(response, size);
-    sprintf(response, html_start, path, path);
+    sprintf(response, html_start, path, path);  //copy the start of the html content to the response string
 
     char* temp_path = NULL, *entity_href = NULL;
     for (i = 0; i < num_of_files; i++)   //go over all the folders and files in the path's folder
@@ -497,7 +472,7 @@ int make_dir_content_response(char* path, int fd)
                 free(dir_file_list);
                 return ERR_WAS_SEND;
             }
-            entity_href = add_entity_quote(entity_name, 0);
+            entity_href = add_entity_quote(entity_name, 0); //add the quotation mark to the name of the folder
             if (entity_href == NULL)
             {
                 free(response);
@@ -546,9 +521,9 @@ int make_dir_content_response(char* path, int fd)
                 return ERR_WAS_SEND;
             }
             if (S_ISDIR(entity_stat.st_mode))  //need to make the "A HREF" folder format
-                entity_href = add_entity_quote(entity_name, 0);
+                entity_href = add_entity_quote(entity_name, 0); //add the quotation mark to the name of the folder
             else    //need to make the "A HREF" file format
-                entity_href = add_entity_quote(entity_name, 1);
+                entity_href = add_entity_quote(entity_name, 1); //add the quotation mark to the name of the folder
 
             if (entity_href == NULL)
             {
@@ -584,7 +559,7 @@ int make_dir_content_response(char* path, int fd)
             sprintf(f_size_to_str, "%d", entity_size);
             size += (int) (strlen(FILE_INFO) + strlen(f_size_to_str) + strlen(entity_href)+ strlen(entity_name) + strlen(last_modified) + 1);
         }
-        old_size = (int)strlen(response);  //saves the size of the char* response before realloc
+        old_size = (int)strlen(response);  //saves the size of char* response before realloc
         response = (char*)realloc(response, size);
         if (response == NULL)
         {
@@ -598,9 +573,9 @@ int make_dir_content_response(char* path, int fd)
             free(dir_file_list);
             return make_response(500, NULL, fd);
         }
-        bzero(response + old_size,size - old_size);
+        bzero(response + old_size, size - old_size);
 
-        if (S_ISDIR(entity_stat.st_mode) == 1) //build the string for a folder
+        if (S_ISDIR(entity_stat.st_mode) == 1) //build a string for a folder
             sprintf(response + strlen(response), FOLDER_INFO, entity_href, entity_name, last_modified);
         else   //build a string for a file
             sprintf(response + strlen(response), FILE_INFO, entity_href, entity_name, last_modified, f_size_to_str);
@@ -647,8 +622,8 @@ int make_dir_content_response(char* path, int fd)
     printf("response = \r\n\r\n%s%s\r\n\r\n", header_response, response);
     #endif
 
-    write_response(header_response, fd);
-    status = write_response(response, fd);
+    write_response(header_response, fd);  //write the headers to the client's socket
+    status = write_response(response, fd);  //write the directory content to the client's socket
     free(date);
     free(last_modified);
     free(response);
@@ -658,6 +633,7 @@ int make_dir_content_response(char* path, int fd)
     return OK;
 }
 
+/**This function gets a number and returns the number of digits which this number contains**/
 int num_to_str_size(int num)
 {
     int counter = 0;
@@ -668,6 +644,7 @@ int num_to_str_size(int num)
     return counter;
 }
 
+/**This function gets a name of file/folder ,adds to it quotation mark, and returns it**/
 char* add_entity_quote(char* entity_name, int flag)
 {
     if (entity_name == NULL)
@@ -679,7 +656,7 @@ char* add_entity_quote(char* entity_name, int flag)
     if (flag == 0)  //it's a folder
     {
         size = (int)strlen(entity_name) + 4;
-        entity_quote = do_str_malloc(size);
+        entity_quote = do_str_malloc(size);  //create array of char* to put the file/folder with the ""
         if (entity_quote == NULL)
             return NULL;
         sprintf(entity_quote, "\"%s/\"", entity_name);
@@ -687,7 +664,7 @@ char* add_entity_quote(char* entity_name, int flag)
     else  //it's a file
     {
         size = (int)strlen(entity_name) + 3;
-        entity_quote = do_str_malloc(size);
+        entity_quote = do_str_malloc(size);  //create array of char* to put the file/folder with the ""
         if (entity_quote == NULL)
             return NULL;
         sprintf(entity_quote, "\"%s\"", entity_name);
@@ -695,7 +672,7 @@ char* add_entity_quote(char* entity_name, int flag)
     return entity_quote;
 }
 
-
+/**This function does a malloc of char* and returns a pointer to it**/
 char* do_str_malloc(int size)
 {
     if (size <= 0)
@@ -707,7 +684,7 @@ char* do_str_malloc(int size)
     return str;
 }
 
-
+/**This function gets a path and checks the validation of this path, it returns if the path is valid or invalid**/
 int check_path_permission(char *path, int fd)
 {
     if (path == NULL)
@@ -719,7 +696,7 @@ int check_path_permission(char *path, int fd)
 
     char *folder = NULL;
     strcpy(path_copy, path);
-    folder = strtok(path_copy, "/");
+    folder = strtok(path_copy, "/");  //cut the path by "/", to check the permissions of each folder in the path
     int status = 0;
     while (1)
     {
@@ -732,8 +709,16 @@ int check_path_permission(char *path, int fd)
 
         if((S_ISDIR(f_stat.st_mode) == 1) && !(f_stat.st_mode & S_IXOTH))  //folder does not have execute permission to "other"
         {
-            free(folder);
-            return make_response(403, NULL, fd);
+            path_copy = strtok(NULL, "/");
+            if (path_copy == NULL && strcmp(path + strlen(path)-1, "/") == 0 && (f_stat.st_mode & S_IROTH))  //it's the last folder in path, and it has "/" at the end and has read permission
+            {
+                free(folder);
+                return OK;  //it means the the permissions of the path's folders are OK
+            }
+            else {
+                free(folder);
+                return make_response(403, NULL, fd);
+            }
         }
         path_copy = strtok(NULL, "/");
         if (path_copy != NULL)
@@ -747,7 +732,7 @@ int check_path_permission(char *path, int fd)
         free(folder);
         return OK;    //it means the the permissions of the path's folders and file are OK
     }
-    if (S_ISDIR(f_stat.st_mode) && strcmp(path+strlen(path)-1, "/") == 0) {
+    if (S_ISDIR(f_stat.st_mode) && strcmp(path+strlen(path)-1, "/") == 0 && (f_stat.st_mode & S_IROTH)) {
         free(folder);
         return OK;  //it means the the permissions of the path's folders are OK
     }
@@ -756,37 +741,40 @@ int check_path_permission(char *path, int fd)
 }
 
 
+
+/**This function makes the welcome socket of the server, and returns the fd of it**/
 int make_socket_connection(char* argv[])
 {
-    int fd;		/* socket descriptor */
+    int fd;		/*socket descriptor*/
 
     if((fd = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
         perror("ERROR: socket() has been failed\r\n");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     struct sockaddr_in srv;	/* used by bind() */
 
     srv.sin_family = AF_INET; /* use the Internet addr family */
 
-    srv.sin_port = htons(atoi(argv[1])); /* bind socket ‘fd’ to the given port*/  //TODO check if need to check the atoi
+    srv.sin_port = htons(atoi(argv[1])); /* bind socket ‘fd’ to the given port*/
 
-/* bind: a client may connect to any of my addresses */
+
     srv.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if(bind(fd, (struct sockaddr*) &srv, sizeof(srv)) < 0)
+    if(bind(fd, (struct sockaddr*) &srv, sizeof(srv)) < 0)  /* bind: a client may connect to any of my addresses */
     {
         perror("ERROR: bind() has been failed\r\n");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
-    if(listen(fd, 5) < 0)   //argv[] should be the maximum number of requests   //TODO check if need to check the atoi
+    if(listen(fd, 5) < 0)  /*connect simultaneously to maximum 5 clients, other client will wait in queue*/
     {
         perror("ERROR: listen() has been failed\r\n");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
     return fd;
 }
+
 
 #define RESPONSE_302 "HTTP/1.0 %s\r\nServer: webserver/1.0\r\nDate: %s\r\nLocation: /%s%c\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
 #define ERROR_RESPONSE "HTTP/1.0 %s\r\nServer: webserver/1.0\r\nDate: %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
@@ -797,6 +785,7 @@ int make_socket_connection(char* argv[])
 #define ERR_404 "404 Not Found"
 #define ERR_500 "500 Internal Server Error"
 #define ERR_501 "501 Not supported"
+/**This function makes a response to the client if an error occurred during the building of the response, or in case of 302 found response**/
 int make_response(int response_num, char* path, int fd)
 {
     int size = 0;
@@ -858,9 +847,9 @@ int make_response(int response_num, char* path, int fd)
             break;
     }
     free(time);
-#ifdef DEBUG
+    #ifdef DEBUG
     printf("response = \r\n\n%s\r\n\r\n", response);
-#endif
+    #endif
     write_response(response, fd);
     free(response);
     if (response_num == 302)
@@ -869,6 +858,7 @@ int make_response(int response_num, char* path, int fd)
 }
 
 
+/**This function sends the time which the response is send**/
 char* get_time()
 {
     time_t now;
@@ -886,6 +876,7 @@ char* get_time()
 }
 
 
+/**This function sends the mime type of a file**/
 char* get_mime_type(char *name) {
     char *ext = strrchr(name, '.');
     if (!ext) return NULL;
@@ -903,6 +894,7 @@ char* get_mime_type(char *name) {
 }
 
 
+/**This function sends the time which the file or folder was modified for the last time**/
 char* get_last_modified(char *file)
 {
     struct tm *clock;
@@ -922,7 +914,7 @@ char* get_last_modified(char *file)
 }
 
 
-/*Method to check if there is a non digit char in a string*/
+/**This function checks if there is a non digit char in a string**/
 int is_only_digits(char* str)
 {
     if (str != NULL)
