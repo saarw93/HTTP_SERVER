@@ -693,6 +693,10 @@ int check_path_permission(char *path, int fd)
     char *folder = NULL;
     strcpy(path_copy, path);
     folder = strtok(path_copy, "/");  //cut the path by "/", to check the permissions of each folder in the path
+    if (folder == NULL) {
+        free(path_copy);
+        return make_response(404, NULL, fd);
+    }
     int status = 0;
     while (1)
     {
