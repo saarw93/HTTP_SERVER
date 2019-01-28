@@ -9,7 +9,7 @@
 
 //#define DEBUG
 #define MAX_PORT_NUM 65535
-#define MIN_PORT_NUM 0
+#define MIN_PORT_NUM 1
 
 void free_threadpool(threadpool* server_threadpool);
 void free_list_rec(work_t* work_ptr);
@@ -27,7 +27,7 @@ void free_list_rec(work_t* work_ptr);
  */
 threadpool* create_threadpool(int num_threads_in_pool)
 {
-    if (num_threads_in_pool <= MIN_PORT_NUM || num_threads_in_pool > MAXT_IN_POOL)
+    if (num_threads_in_pool <= 0 || num_threads_in_pool > MAXT_IN_POOL)
         return NULL;
 
 
@@ -52,6 +52,7 @@ threadpool* create_threadpool(int num_threads_in_pool)
     if (server_threadpool->threads == NULL)
     {
         printf("Error: pthread_t malloc has failed\r\n");
+        free(server_threadpool);
         return NULL;
     }
 
@@ -61,7 +62,7 @@ threadpool* create_threadpool(int num_threads_in_pool)
         rc = pthread_create(&server_threadpool->threads[i], NULL, do_work, (void *)server_threadpool);  //create the threads
         if (rc)
         {
-            printf("ERROR with pthread_create\r\n");
+            perror("ERROR with pthread_create\r\n");
             destroy_threadpool(server_threadpool);
             return NULL;
         }
@@ -95,7 +96,6 @@ void* do_work(void* p)
         {
             pthread_mutex_unlock(&server_threadpool->qlock); //release the mutex beofre the thread dies
             return NULL;
-            //pthread_exit(NULL);
         }
         if (server_threadpool->qsize == 0 && server_threadpool->dont_accept == 0)
             pthread_cond_wait(&server_threadpool->q_not_empty, &server_threadpool->qlock); //thread wait for a new job
@@ -103,7 +103,6 @@ void* do_work(void* p)
         if (server_threadpool->shutdown == 1) //the destroy_threadpool function waked the thread up, so need to kill the thread
         {
             pthread_mutex_unlock(&server_threadpool->qlock); //release the mutex beofre the thread dies
-            ///pthread_exit(NULL);  //if we do pthread_exit we have still reachable in valgrind
             return NULL;
         }
 
@@ -122,7 +121,6 @@ void* do_work(void* p)
         if (server_threadpool->qsize == 0 && server_threadpool->dont_accept == 1)  //let destroy function work
         {
             pthread_cond_signal(&server_threadpool->q_empty);  //raise the flag to say there is no jobs in the queue
-            //pthread_exit(NULL);
         }
         pthread_mutex_unlock(&server_threadpool->qlock);   //unlock the critical section of taking a job from queue, so other threads will be able to get in
 
@@ -157,7 +155,6 @@ void dispatch(threadpool* from_me, dispatch_fn dispatch_to_here, void *arg)
     {
         //dont accept new item to the queue
         pthread_mutex_unlock(&from_me->qlock);
-        //pthread_cond_signal(&from_me->q_empty); //destroy function needs to work
         return;
     }
 
@@ -199,6 +196,11 @@ void free_threadpool(threadpool* server_threadpool)
         free_list_rec(server_threadpool->qhead);  //free what was left in the queue
     if (server_threadpool->threads)
         free(server_threadpool->threads);
+
+    pthread_mutex_destroy(&server_threadpool->qlock);
+    pthread_cond_destroy(&server_threadpool->q_empty);
+    pthread_cond_destroy(&server_threadpool->q_not_empty);
+
     free(server_threadpool);
 }
 
@@ -232,7 +234,6 @@ void destroy_threadpool(threadpool* destroyme)
 
     if (destroyme->qsize > 0)
     {
-      //  pthread_mutex_unlock(&destroyme->qlock);
         pthread_cond_wait(&destroyme->q_empty, &destroyme->qlock); //wait for the queue to be empty before destroying the threadpool
     }
 
@@ -245,9 +246,8 @@ void destroy_threadpool(threadpool* destroyme)
     {
         pthread_join(destroyme->threads[i], NULL);
     }
-    pthread_mutex_destroy(&destroyme->qlock);
-    pthread_cond_destroy(&destroyme->q_empty);
-    pthread_cond_destroy(&destroyme->q_not_empty);
+    //pthread_mutex_destroy(&destroyme->qlock);
+    //pthread_cond_destroy(&destroyme->q_empty);
+    //pthread_cond_destroy(&destroyme->q_not_empty);
     free_threadpool(destroyme);  //free all the memory allocations
-    //pthread_exit(NULL);  //kill the main thread
 }
