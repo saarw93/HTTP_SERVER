@@ -246,8 +246,5 @@ void destroy_threadpool(threadpool* destroyme)
     {
         pthread_join(destroyme->threads[i], NULL);
     }
-    //pthread_mutex_destroy(&destroyme->qlock);
-    //pthread_cond_destroy(&destroyme->q_empty);
-    //pthread_cond_destroy(&destroyme->q_not_empty);
     free_threadpool(destroyme);  //free all the memory allocations
 }
